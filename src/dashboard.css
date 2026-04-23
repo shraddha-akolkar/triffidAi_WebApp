@@ -333,6 +333,24 @@
   font-weight: 600;
 }
 
+.project-store-toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.builder-select {
+  width: 100%;
+  background: rgba(9, 9, 11, 0.5);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  color: var(--text-primary);
+  padding: 0.7rem 0.8rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
 .builder-input,
 .builder-textarea {
   width: 100%;
@@ -417,6 +435,16 @@
   opacity: 0.6;
 }
 
+.builder-btn.slim {
+  width: auto;
+  margin-bottom: 0;
+  padding: 0.65rem 0.9rem;
+}
+
+.builder-btn.danger {
+  color: #fca5a5;
+}
+
 .builder-error {
   color: #fca5a5;
   margin: 0;
@@ -451,6 +479,84 @@
   color: var(--text-muted);
   padding: 1rem;
   text-align: center;
+}
+
+.history-panel {
+  margin-top: 1rem;
+}
+
+.history-list {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+
+.history-item {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.history-item:last-child {
+  border-bottom: none;
+}
+
+.history-item span {
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.project-list-card {
+  margin-top: 1.5rem;
+}
+
+.project-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.project-list-item {
+  width: 100%;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 0.8rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.project-list-item:hover {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.project-list-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.project-list-item-head span {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+}
+
+.project-list-item p {
+  margin: 0.45rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.project-list-empty {
+  color: var(--text-muted);
+  margin-top: 0.6rem;
 }
 
 @media (max-width: 1200px) {

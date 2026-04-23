@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   LayoutDashboard, FileCode2, BookOpen, Database, 
   Globe, Rocket, GitBranch, LayoutTemplate, 
@@ -6,11 +6,13 @@ import {
   Building, LogOut, ShieldAlert, Lock
 } from 'lucide-react';
 import CICDPipeline from './CICDPipeline';
+import { useProjectStore } from './context/ProjectStore';
 import './dashboard.css';
 
 const MODULES = {
   dashboard: { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  codeGen: { id: 'codeGen', label: 'AI Code Generator', icon: FileCode2 },
+  codeGen: { id: 'codeGen', label: 'Frontend Builder', icon: FileCode2 },
+  backendGen: { id: 'backendGen', label: 'Backend Generator', icon: Database },
   docs: { id: 'docs', label: 'Documentation', icon: BookOpen },
   database: { id: 'database', label: 'Database Management', icon: Database },
   api: { id: 'api', label: 'API Management', icon: Globe },
@@ -27,9 +29,9 @@ const MODULES = {
 
 // Define restrictions mapping
 const ROLE_ACCESS = {
-  employee: ['dashboard', 'codeGen', 'docs'],
+  employee: ['dashboard', 'codeGen', 'backendGen', 'docs'],
   project_manager: [
-    'dashboard', 'codeGen', 'docs', 'database', 'api', 
+    'dashboard', 'codeGen', 'backendGen', 'docs', 'database', 'api', 
     'deploy', 'cicd', 'visual', 'cost', 'cloud'
   ],
   admin: Object.keys(MODULES), // all modules
@@ -51,15 +53,55 @@ const Dashboard = ({ user, onLogout }) => {
   const [generatedCss, setGeneratedCss] = useState('');
   const [generationError, setGenerationError] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const {
+    projects,
+    selectedProjectId,
+    setSelectedProjectId,
+    upsertProject,
+    deleteProject,
+  } = useProjectStore();
 
   const allowedModules = ROLE_ACCESS[user.role.toLowerCase()] || [];
   const openAiApiKey = import.meta.env.VITE_OPENAI_API_KEY;
+  const tenantProjects = useMemo(
+    () =>
+      projects
+        .filter((project) => project.tenantId === user.tenantId)
+        .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0)),
+    [projects, user.tenantId]
+  );
+  const selectedProject = tenantProjects.find((project) => project.id === selectedProjectId) || null;
 
   const handleNavClick = (moduleId) => {
     setActiveModule(moduleId);
   };
 
   const hasAccess = (moduleId) => allowedModules.includes(moduleId);
+
+  useEffect(() => {
+    if (!tenantProjects.length) {
+      if (selectedProjectId) setSelectedProjectId(null);
+      return;
+    }
+
+    if (!selectedProject || selectedProject.tenantId !== user.tenantId) {
+      setSelectedProjectId(tenantProjects[0].id);
+    }
+  }, [selectedProject, selectedProjectId, setSelectedProjectId, tenantProjects, user.tenantId]);
+
+  useEffect(() => {
+    if (!selectedProject) {
+      return;
+    }
+
+    setProjectName(selectedProject.name || '');
+    setSelectedTech(selectedProject.tech || 'html-css');
+    setBuildPrompt(selectedProject.buildPrompt || '');
+    setGeneratedHtml(selectedProject.generatedHtml || '');
+    setGeneratedCss(selectedProject.generatedCss || '');
+    setFeaturePrompt('');
+    setGenerationError('');
+  }, [selectedProject]);
 
   const getAssistantText = (responseJson) => {
     if (responseJson.output_text) return responseJson.output_text;
@@ -168,6 +210,32 @@ Keep existing features working.`;
 
       setGeneratedHtml(html);
       setGeneratedCss(css);
+      const activeProjectId = selectedProject?.id || crypto.randomUUID();
+      const historyItem = {
+        id: crypto.randomUUID(),
+        mode,
+        prompt: mode === 'initial' ? buildPrompt.trim() : featurePrompt.trim(),
+        html,
+        css,
+        generatedAt: new Date().toISOString(),
+      };
+
+      upsertProject({
+        id: activeProjectId,
+        tenantId: user.tenantId,
+        ownerEmail: user.email,
+        name: projectName.trim(),
+        tech: selectedTech,
+        buildPrompt: buildPrompt.trim(),
+        generatedHtml: html,
+        generatedCss: css,
+        featurePrompts:
+          mode === 'feature'
+            ? [...(selectedProject?.featurePrompts || []), featurePrompt.trim()]
+            : selectedProject?.featurePrompts || [],
+        history: [...(selectedProject?.history || []), historyItem],
+      });
+      setSelectedProjectId(activeProjectId);
 
       if (mode === 'feature') {
         setFeaturePrompt('');
@@ -191,6 +259,32 @@ Keep existing features working.`;
   </body>
 </html>`;
 
+  const handleCreateFreshProject = () => {
+    setSelectedProjectId(null);
+    setProjectName('');
+    setSelectedTech('html-css');
+    setBuildPrompt('');
+    setFeaturePrompt('');
+    setGeneratedHtml('');
+    setGeneratedCss('');
+    setGenerationError('');
+  };
+
+  const handleProjectSelect = (projectId) => {
+    setSelectedProjectId(projectId);
+  };
+
+  const handleDeleteCurrentProject = () => {
+    if (!selectedProject) return;
+    deleteProject(selectedProject.id);
+    handleCreateFreshProject();
+  };
+
+  const handleOpenProjectFromDashboard = (projectId) => {
+    setSelectedProjectId(projectId);
+    setActiveModule('codeGen');
+  };
+
   const renderCodeGenerator = () => (
     <div className="module-content">
       <div className="module-header">
@@ -202,6 +296,32 @@ Keep existing features working.`;
 
       <div className="builder-grid">
         <div className="builder-panel">
+          <div className="project-store-toolbar">
+            <select
+              className="builder-select"
+              value={selectedProject?.id || ''}
+              onChange={(event) => handleProjectSelect(event.target.value)}
+            >
+              <option value="">New Project (Unsaved)</option>
+              {tenantProjects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name} - {project.tech}
+                </option>
+              ))}
+            </select>
+            <button type="button" className="builder-btn secondary slim" onClick={handleCreateFreshProject}>
+              New
+            </button>
+            <button
+              type="button"
+              className="builder-btn secondary slim danger"
+              onClick={handleDeleteCurrentProject}
+              disabled={!selectedProject}
+            >
+              Delete
+            </button>
+          </div>
+
           <label className="builder-label" htmlFor="projectName">Project Name</label>
           <input
             id="projectName"
@@ -284,6 +404,53 @@ Keep existing features working.`;
               Generate your project first to see the created website here.
             </div>
           )}
+
+          {selectedProject?.history?.length ? (
+            <div className="history-panel">
+              <div className="builder-label">Project History</div>
+              <div className="history-list">
+                {selectedProject.history.slice(-5).reverse().map((entry) => (
+                  <div key={entry.id} className="history-item">
+                    <strong>{entry.mode === 'initial' ? 'Initial Build' : 'Feature Update'}</strong>
+                    <span>{entry.prompt}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderBackendGenerator = () => (
+    <div className="module-content">
+      <div className="module-header">
+        <h1 className="module-title">Backend Generator</h1>
+        <p className="module-desc">
+          Generate backend APIs, database schema, and service logic from prompts.
+        </p>
+      </div>
+
+      <div className="card">
+        <h3 style={{ marginBottom: '0.8rem' }}>Coming Next</h3>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+          This page is ready in navigation. Next step is to enable prompt-based backend generation
+          (Node/Express, routes, controllers, schema, auth, and API docs) using GPT.
+        </p>
+        <div className="grid-cards">
+          <div className="card">
+            <div className="card-title">Planned Stacks</div>
+            <div style={{ color: 'var(--text-secondary)' }}>Node + Express, NestJS, FastAPI</div>
+          </div>
+          <div className="card">
+            <div className="card-title">Planned Output</div>
+            <div style={{ color: 'var(--text-secondary)' }}>Routes, Services, Models, Env setup</div>
+          </div>
+          <div className="card">
+            <div className="card-title">Persistence</div>
+            <div style={{ color: 'var(--text-secondary)' }}>Saved to localStorage like frontend projects</div>
+          </div>
         </div>
       </div>
     </div>
@@ -345,6 +512,10 @@ Keep existing features working.`;
       return renderCodeGenerator();
     }
 
+    if (activeModule === 'backendGen') {
+      return renderBackendGenerator();
+    }
+
     return (
       <div className="module-content">
         <div className="module-header">
@@ -383,6 +554,34 @@ Keep existing features working.`;
             </div>
           </div>
         </div>
+
+        {activeModule === 'dashboard' && (
+          <div className="card project-list-card">
+            <div className="card-title">Created Projects</div>
+            {tenantProjects.length ? (
+              <div className="project-list">
+                {tenantProjects.map((project) => (
+                  <button
+                    key={project.id}
+                    type="button"
+                    className="project-list-item"
+                    onClick={() => handleOpenProjectFromDashboard(project.id)}
+                  >
+                    <div className="project-list-item-head">
+                      <strong>{project.name || 'Untitled Project'}</strong>
+                      <span>{project.tech || 'html-css'}</span>
+                    </div>
+                    <p>{project.buildPrompt || 'No build prompt saved yet.'}</p>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="project-list-empty">
+                No projects yet. Open AI Code Generator to create your first project.
+              </p>
+            )}
+          </div>
+        )}
 
         {['users', 'database'].includes(activeModule) && (
           <div className="card" style={{ marginTop: '1.5rem' }}>
@@ -431,6 +630,7 @@ Keep existing features working.`;
             <div className="nav-section-title">General</div>
             {renderSidebarItem('dashboard')}
             {renderSidebarItem('codeGen')}
+            {renderSidebarItem('backendGen')}
             {renderSidebarItem('docs')}
           </div>
 

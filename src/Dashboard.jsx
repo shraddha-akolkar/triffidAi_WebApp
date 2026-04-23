@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { 
   LayoutDashboard, FileCode2, BookOpen, Database, 
   Globe, Rocket, GitBranch, LayoutTemplate, 
@@ -53,6 +53,14 @@ const Dashboard = ({ user, onLogout }) => {
   const [generatedCss, setGeneratedCss] = useState('');
   const [generationError, setGenerationError] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isNewProjectMode, setIsNewProjectMode] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState('about:blank');
+  const [previewUrlInput, setPreviewUrlInput] = useState('about:blank');
+  const [previewHistory, setPreviewHistory] = useState(['about:blank']);
+  const [previewHistoryIndex, setPreviewHistoryIndex] = useState(0);
+  const previewFrameRef = useRef(null);
+  const previewHistoryIndexRef = useRef(0);
+  const previewPendingNavigationRef = useRef(null);
   const {
     projects,
     selectedProjectId,
@@ -79,6 +87,10 @@ const Dashboard = ({ user, onLogout }) => {
   const hasAccess = (moduleId) => allowedModules.includes(moduleId);
 
   useEffect(() => {
+    if (isNewProjectMode) {
+      return;
+    }
+
     if (!tenantProjects.length) {
       if (selectedProjectId) setSelectedProjectId(null);
       return;
@@ -87,13 +99,14 @@ const Dashboard = ({ user, onLogout }) => {
     if (!selectedProject || selectedProject.tenantId !== user.tenantId) {
       setSelectedProjectId(tenantProjects[0].id);
     }
-  }, [selectedProject, selectedProjectId, setSelectedProjectId, tenantProjects, user.tenantId]);
+  }, [isNewProjectMode, selectedProject, selectedProjectId, setSelectedProjectId, tenantProjects, user.tenantId]);
 
   useEffect(() => {
     if (!selectedProject) {
       return;
     }
 
+    setIsNewProjectMode(false);
     setProjectName(selectedProject.name || '');
     setSelectedTech(selectedProject.tech || 'html-css');
     setBuildPrompt(selectedProject.buildPrompt || '');
@@ -102,6 +115,59 @@ const Dashboard = ({ user, onLogout }) => {
     setFeaturePrompt('');
     setGenerationError('');
   }, [selectedProject]);
+
+  useEffect(() => {
+    previewHistoryIndexRef.current = previewHistoryIndex;
+  }, [previewHistoryIndex]);
+
+  useEffect(() => {
+    const onPreviewMessage = (event) => {
+      if (event.source !== previewFrameRef.current?.contentWindow) return;
+      const payload = event.data;
+      if (!payload || payload.source !== 'triffid-preview' || payload.type !== 'state') return;
+
+      const incomingUrl = payload.url || 'about:blank';
+      setPreviewUrl(incomingUrl);
+      setPreviewUrlInput(incomingUrl);
+      setPreviewHistory((currentHistory) => {
+        const currentIndex = previewHistoryIndexRef.current;
+        const pending = previewPendingNavigationRef.current;
+        if (pending && pending.url === incomingUrl) {
+          previewPendingNavigationRef.current = null;
+          setPreviewHistoryIndex(pending.index);
+          return currentHistory;
+        }
+
+        const activeUrl = currentHistory[currentIndex];
+        if (incomingUrl === activeUrl) return currentHistory;
+
+        const head = currentHistory.slice(0, currentIndex + 1);
+        const nextHistory = [...head, incomingUrl];
+        setPreviewHistoryIndex(nextHistory.length - 1);
+        return nextHistory;
+      });
+    };
+
+    window.addEventListener('message', onPreviewMessage);
+    return () => window.removeEventListener('message', onPreviewMessage);
+  }, []);
+
+  useEffect(() => {
+    if (!generatedHtml) {
+      previewPendingNavigationRef.current = null;
+      setPreviewUrl('about:blank');
+      setPreviewUrlInput('about:blank');
+      setPreviewHistory(['about:blank']);
+      setPreviewHistoryIndex(0);
+      return;
+    }
+
+    previewPendingNavigationRef.current = null;
+    setPreviewUrl('about:srcdoc');
+    setPreviewUrlInput('about:srcdoc');
+    setPreviewHistory(['about:srcdoc']);
+    setPreviewHistoryIndex(0);
+  }, [generatedHtml]);
 
   const getAssistantText = (responseJson) => {
     if (responseJson.output_text) return responseJson.output_text;
@@ -235,6 +301,7 @@ Keep existing features working.`;
             : selectedProject?.featurePrompts || [],
         history: [...(selectedProject?.history || []), historyItem],
       });
+      setIsNewProjectMode(false);
       setSelectedProjectId(activeProjectId);
 
       if (mode === 'feature') {
@@ -252,14 +319,129 @@ Keep existing features working.`;
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="https://example.com/" />
     <style>${generatedCss}</style>
   </head>
   <body>
     ${generatedHtml}
+    <script>
+      (function () {
+        const safePostState = () => {
+          try {
+            window.parent.postMessage(
+              {
+                source: 'triffid-preview',
+                type: 'state',
+                url: window.location.href,
+                canGoBack: window.history.length > 1
+              },
+              '*'
+            );
+          } catch (error) {
+            // Ignore cross-origin post errors in preview.
+          }
+        };
+
+        const toAbsoluteUrl = (raw) => {
+          try {
+            return new URL(raw, window.location.href).toString();
+          } catch (error) {
+            return null;
+          }
+        };
+
+        document.addEventListener(
+          'click',
+          (event) => {
+            const link = event.target.closest && event.target.closest('a[href]');
+            if (!link) return;
+            if (link.target && link.target !== '_self') return;
+            const href = link.getAttribute('href');
+            if (!href || href.startsWith('javascript:')) return;
+            const absoluteUrl = toAbsoluteUrl(href);
+            if (!absoluteUrl) return;
+            event.preventDefault();
+            window.location.assign(absoluteUrl);
+          },
+          true
+        );
+
+        window.addEventListener('message', (event) => {
+          const payload = event.data;
+          if (!payload || payload.source !== 'triffid-parent') return;
+
+          if (payload.command === 'back') window.history.back();
+          if (payload.command === 'forward') window.history.forward();
+          if (payload.command === 'reload') window.location.reload();
+          if (payload.command === 'navigate' && payload.url) window.location.assign(payload.url);
+        });
+
+        window.addEventListener('load', safePostState);
+        window.addEventListener('hashchange', safePostState);
+        window.addEventListener('popstate', safePostState);
+        safePostState();
+      })();
+    </script>
   </body>
 </html>`;
 
+  const sendPreviewCommand = (command, payload = {}) => {
+    const frameWindow = previewFrameRef.current?.contentWindow;
+    if (!frameWindow) return;
+    frameWindow.postMessage({ source: 'triffid-parent', command, ...payload }, '*');
+  };
+
+  const normalizeUrl = (rawUrl) => {
+    const candidate = rawUrl.trim();
+    if (!candidate) return '';
+    if (candidate.startsWith('about:')) return candidate;
+
+    const hasProtocol = /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(candidate);
+    const withProtocol = hasProtocol ? candidate : `https://${candidate}`;
+
+    try {
+      return new URL(withProtocol).toString();
+    } catch (error) {
+      return '';
+    }
+  };
+
+  const handlePreviewNavigation = () => {
+    const normalized = normalizeUrl(previewUrlInput);
+    if (!normalized) {
+      setGenerationError('Enter a valid preview URL (for example: example.com).');
+      return;
+    }
+    setGenerationError('');
+    sendPreviewCommand('navigate', { url: normalized });
+  };
+
+  const handlePreviewBack = () => {
+    if (previewHistoryIndex <= 0) return;
+    const nextIndex = previewHistoryIndex - 1;
+    const targetUrl = previewHistory[nextIndex];
+    if (!targetUrl) return;
+    previewPendingNavigationRef.current = { url: targetUrl, index: nextIndex };
+    setPreviewHistoryIndex(nextIndex);
+    setPreviewUrl(targetUrl);
+    setPreviewUrlInput(targetUrl);
+    sendPreviewCommand('navigate', { url: targetUrl });
+  };
+
+  const handlePreviewForward = () => {
+    if (previewHistoryIndex >= previewHistory.length - 1) return;
+    const nextIndex = previewHistoryIndex + 1;
+    const targetUrl = previewHistory[nextIndex];
+    if (!targetUrl) return;
+    previewPendingNavigationRef.current = { url: targetUrl, index: nextIndex };
+    setPreviewHistoryIndex(nextIndex);
+    setPreviewUrl(targetUrl);
+    setPreviewUrlInput(targetUrl);
+    sendPreviewCommand('navigate', { url: targetUrl });
+  };
+
   const handleCreateFreshProject = () => {
+    setIsNewProjectMode(true);
     setSelectedProjectId(null);
     setProjectName('');
     setSelectedTech('html-css');
@@ -271,6 +453,11 @@ Keep existing features working.`;
   };
 
   const handleProjectSelect = (projectId) => {
+    if (!projectId) {
+      handleCreateFreshProject();
+      return;
+    }
+    setIsNewProjectMode(false);
     setSelectedProjectId(projectId);
   };
 
@@ -281,6 +468,7 @@ Keep existing features working.`;
   };
 
   const handleOpenProjectFromDashboard = (projectId) => {
+    setIsNewProjectMode(false);
     setSelectedProjectId(projectId);
     setActiveModule('codeGen');
   };
@@ -295,6 +483,21 @@ Keep existing features working.`;
       </div>
 
       <div className="builder-grid">
+        {isGenerating ? (
+          <div className="generation-overlay" role="status" aria-live="polite" aria-busy="true">
+            <div className="generation-overlay-core">
+              <div className="generation-rings" />
+              <div className="generation-rings ring-delay" />
+              <div className="generation-rings ring-delay-2" />
+              <div className="generation-center">
+                <FileCode2 size={46} />
+              </div>
+            </div>
+            <h3>Generating Code</h3>
+            <p>AI is building your project right now...</p>
+          </div>
+        ) : null}
+
         <div className="builder-panel">
           <div className="project-store-toolbar">
             <select
@@ -393,10 +596,68 @@ Keep existing features working.`;
           </div>
 
           {generatedHtml ? (
+            <div className="preview-browser-bar">
+              <div className="preview-nav-buttons">
+                <button
+                  type="button"
+                  className="preview-nav-btn"
+                  onClick={handlePreviewBack}
+                  disabled={previewHistoryIndex <= 0}
+                  aria-label="Go back"
+                  title="Back"
+                >
+                  ←
+                </button>
+                <button
+                  type="button"
+                  className="preview-nav-btn"
+                  onClick={handlePreviewForward}
+                  disabled={previewHistoryIndex >= previewHistory.length - 1}
+                  aria-label="Go forward"
+                  title="Forward"
+                >
+                  →
+                </button>
+                <button
+                  type="button"
+                  className="preview-nav-btn"
+                  onClick={() => sendPreviewCommand('reload')}
+                  aria-label="Reload"
+                  title="Reload"
+                >
+                  ↻
+                </button>
+              </div>
+              <form
+                className="preview-url-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  handlePreviewNavigation();
+                }}
+              >
+                <input
+                  className="preview-url-input"
+                  value={previewUrlInput}
+                  onChange={(event) => setPreviewUrlInput(event.target.value)}
+                  aria-label="Preview URL"
+                  placeholder="Enter website URL"
+                />
+                <button type="submit" className="preview-go-btn">
+                  Go
+                </button>
+              </form>
+              <span className="preview-url-current" title={previewUrl}>
+                {previewUrl}
+              </span>
+            </div>
+          ) : null}
+
+          {generatedHtml ? (
             <iframe
+              ref={previewFrameRef}
               title="Generated Website Preview"
               className="website-preview-frame"
-              sandbox="allow-scripts"
+              sandbox="allow-scripts allow-forms"
               srcDoc={previewDocument}
             />
           ) : (
